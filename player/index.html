@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>sonicbrain</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root { color-scheme: dark; }
+  html, body { height: 100%; margin: 0; background: #0b0d12; color: #e8e8f0; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  body { display: flex; flex-direction: column; }
+  header { padding: 16px 20px; display: flex; align-items: center; gap: 16px; border-bottom: 1px solid #1c2029; }
+  h1 { font-size: 14px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; margin: 0; color: #9aa0ff; }
+  #status { font-size: 12px; padding: 3px 9px; border-radius: 999px; background: #1c2029; color: #8a8f9c; }
+  #status.live { background: #163a24; color: #5fe37f; }
+  button { background: #1c2029; color: #e8e8f0; border: 1px solid #2a2f3a; padding: 7px 14px; border-radius: 6px; font: inherit; cursor: pointer; }
+  button:hover { border-color: #4a4fff; }
+  main { flex: 1; position: relative; }
+  canvas { width: 100%; height: 100%; display: block; }
+  #hint { position: absolute; bottom: 16px; left: 20px; font-size: 12px; color: #565c6b; line-height: 1.6; }
+  code { color: #9aa0ff; }
+</style>
+</head>
+<body>
+<header>
+  <h1>sonicbrain</h1>
+  <span id="status">idle</span>
+  <button id="toggle">Start listening</button>
+</header>
+<main>
+  <canvas id="viz"></canvas>
+  <div id="hint">
+    feed it anything: <code>curl -X POST http://localhost:8080/feed -d '{"value": 0.7}'</code>
+    &nbsp;·&nbsp; or run <code>npm run market</code> for live BTC/ETH/SOL sonification
+  </div>
+</main>
+<script>
+  const statusEl = document.getElementById('status');
+  const toggleBtn = document.getElementById('toggle');
+  const canvas = document.getElementById('viz');
+  const ctx = canvas.getContext('2d');
+
+  function resize() {
+    canvas.width = canvas.clientWidth * devicePixelRatio;
+    canvas.height = canvas.clientHeight * devicePixelRatio;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  let audioCtx = null;
+  let master = null;
+  let socket = null;
+  let particles = [];
+
+  function playNote({ freq, velocity, duration }) {
+    const now = audioCtx.currentTime;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(velocity * 0.5, now + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+    osc.connect(gain).connect(master);
+    osc.start(now);
+    osc.stop(now + duration + 0.05);
+  }
+
+  const VOICE_HUES = { BTCUSDT: 25, ETHUSDT: 210, SOLUSDT: 285 };
+
+  function addParticle(note) {
+    const w = canvas.width, h = canvas.height;
+    const baseHue = VOICE_HUES[note.voice] ?? (250 - (note.norm ?? 0.5) * 200);
+    const lane = note.voice ? (Object.keys(VOICE_HUES).indexOf(note.voice) + 0.5) / Object.keys(VOICE_HUES).length : (note.norm ?? Math.random());
+    particles.push({
+      x: lane * w,
+      y: h,
+      r: 6 * devicePixelRatio + note.velocity * 30 * devicePixelRatio,
+      hue: baseHue,
+      label: note.voice,
+      born: performance.now(),
+      life: 900 + note.duration * 1000,
+    });
+  }
+
+  function draw() {
+    const w = canvas.width, h = canvas.height;
+    ctx.fillStyle = 'rgba(11,13,18,0.25)';
+    ctx.fillRect(0, 0, w, h);
+    const now = performance.now();
+    particles = particles.filter((p) => now - p.born < p.life);
+    for (const p of particles) {
+      const t = (now - p.born) / p.life;
+      const y = p.y - t * h * 0.9;
+      const alpha = 1 - t;
+      ctx.beginPath();
+      ctx.arc(p.x, y, p.r * (0.6 + t * 0.8), 0, Math.PI * 2);
+      ctx.fillStyle = `hsla(${p.hue}, 85%, 65%, ${alpha * 0.8})`;
+      ctx.fill();
+    }
+    requestAnimationFrame(draw);
+  }
+  requestAnimationFrame(draw);
+
+  function connect() {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    socket = new WebSocket(`${proto}://${location.host}/ws`);
+    socket.onopen = () => { statusEl.textContent = 'live'; statusEl.classList.add('live'); };
+    socket.onclose = () => { statusEl.textContent = 'disconnected'; statusEl.classList.remove('live'); };
+    socket.onmessage = (evt) => {
+      const note = JSON.parse(evt.data);
+      playNote(note);
+      addParticle(note);
+    };
+  }
+
+  let listening = false;
+  toggleBtn.addEventListener('click', async () => {
+    if (!listening) {
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      master = master || (() => { const g = audioCtx.createGain(); g.gain.value = 0.8; g.connect(audioCtx.destination); return g; })();
+      await audioCtx.resume();
+      connect();
+      listening = true;
+      toggleBtn.textContent = 'Stop listening';
+    } else {
+      socket?.close();
+      listening = false;
+      toggleBtn.textContent = 'Start listening';
+      statusEl.textContent = 'idle';
+      statusEl.classList.remove('live');
+    }
+  });
+</script>
+</body>
+</html>

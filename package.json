@@ -1,0 +1,15 @@
+{
+  "name": "sonicbrain",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A pluggable brain that sonifies arbitrary data streams into music, streamed live to any player.",
+  "scripts": {
+    "start": "node src/server.js",
+    "demo": "node src/server.js --source=randomwalk",
+    "market": "node src/server.js --source=market"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
